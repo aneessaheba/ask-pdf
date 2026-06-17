@@ -2,25 +2,27 @@ import os
 
 import numpy as np
 from dotenv import load_dotenv
-
 from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+from ragas.metrics.collections import faithfulness, answer_relevancy, context_precision, context_recall
+from ragas.run_config import RunConfig
 from datasets import Dataset
 from search import search
 from groq import Groq
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
-from ragas.run_config import RunConfig
 
 load_dotenv()
 
-gemini_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=os.environ["GEMINI_API_KEY"])
-gemini_embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=os.environ["GEMINI_API_KEY"])
-ragas_llm = LangchainLLMWrapper(gemini_llm)
-ragas_embeddings = LangchainEmbeddingsWrapper(gemini_embeddings)
+# use local llama3.1 as judge — free, no quota, no API key
+ollama_llm = ChatOllama(model="llama3.1")
+ollama_embeddings = OllamaEmbeddings(model="qwen3-embedding:0.6b")
 
-groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+ragas_llm = LangchainLLMWrapper(ollama_llm)
+ragas_embeddings = LangchainEmbeddingsWrapper(ollama_embeddings)
+
+# use groq for answer generation
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def get_answer(question, contexts):
     context_text = ""
@@ -33,6 +35,7 @@ def get_answer(question, contexts):
     )
     return response.choices[0].message.content
 
+# test questions and ground truth answers
 test_cases = [
     {"question": "What is the Ego4D dataset?", "ground_truth": "Ego4D is a large scale egocentric video dataset collected from people wearing cameras in their daily lives."},
     {"question": "What tasks does Ego4D benchmark include?", "ground_truth": "Ego4D includes tasks such as episodic memory, forecasting, hand and object interaction, audio visual diarization and social interaction."},
@@ -42,7 +45,7 @@ test_cases = [
 ]
 
 print("Running eval on all questions...\n")
-user_inputs, responses, retrieved_contexts, references = [], [], [], []
+questions, answers, contexts, ground_truths = [], [], [], []
 
 for tc in test_cases:
     question = tc["question"]
@@ -50,28 +53,26 @@ for tc in test_cases:
     chunks = search(question)
     context_texts = [c["text"] for c in chunks]
     answer = get_answer(question, context_texts)
-    user_inputs.append(question)
-    responses.append(answer)
-    retrieved_contexts.append(context_texts)
-    references.append(tc["ground_truth"])
+    questions.append(question)
+    answers.append(answer)
+    contexts.append(context_texts)
+    ground_truths.append(tc["ground_truth"])
     print(f"A: {answer[:100]}...\n")
 
 dataset = Dataset.from_dict({
-    "user_input": user_inputs,
-    "response": responses,
-    "retrieved_contexts": retrieved_contexts,
-    "reference": references,
+    "user_input": questions,
+    "response": answers,
+    "retrieved_contexts": contexts,
+    "reference": ground_truths
 })
 
-print("\nCalculating RAGAS scores...\n")
+print("\nCalculating RAGAS scores using local Llama3.1...\n")
 result = evaluate(
     dataset=dataset,
     metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
     llm=ragas_llm,
     embeddings=ragas_embeddings,
-    # surface real API/parsing errors instead of silently turning them into nan
-    raise_exceptions=True,
-    # run one call at a time with a generous timeout so a small Gemini quota doesn't trip into 429s
+    raise_exceptions=False,
     run_config=RunConfig(max_workers=1, timeout=600),
 )
 
