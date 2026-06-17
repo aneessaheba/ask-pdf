@@ -3,7 +3,7 @@ import os
 import numpy as np
 from dotenv import load_dotenv
 from ragas import evaluate
-from ragas.metrics.collections import faithfulness, answer_relevancy, context_precision, context_recall
+from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
 from ragas.run_config import RunConfig
 from datasets import Dataset
 from search import search
